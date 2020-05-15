@@ -66,9 +66,13 @@ let modelParameters = SNLM.Parameters(
   order: order
 )
 
-var model = SNLM(parameters: modelParameters)
+let device = Device.defaultXLA
 
-let optimizer = Adam(for: model, learningRate: learningRate)
+var model = SNLM(parameters: modelParameters)
+model.move(to: device)
+
+var optimizer = Adam(for: model)
+optimizer = Adam(copying: optimizer, to: device)
 
 print("Starting training...")
 
@@ -89,13 +93,16 @@ for epoch in 1...maxEpochs {
     trainingLossSum += loss.scalarized()
     trainingBatchCount += 1
     optimizer.update(&model, along: gradients)
-
+    LazyTensorBarrier()
+    #if false
     if hasNaN(gradients) {
       print("Warning: grad has NaN")
     }
     if hasNaN(model) {
       print("Warning: model has NaN")
     }
+    #endif
+    PrintX10Metrics()
   }
 
   // Decrease the learning rate if loss is stagnant.

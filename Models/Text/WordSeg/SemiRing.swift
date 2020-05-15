@@ -28,7 +28,7 @@ import TensorFlow
 @differentiable
 public func logSumExp(_ x: [Tensor<Float>]) -> Tensor<Float> {
   // Deal with an empty array first.
-  if x.count == 0 { return Tensor(-Float.infinity) }
+  if x.count == 0 { return Tensor(-Float.infinity, on: Device.defaultXLA) }
   return Tensor<Float>(stacking: x).logSumExp()
 }
 
@@ -55,8 +55,8 @@ public struct SemiRing: Differentiable {
 
   @differentiable
   public init(logp: Float, logr: Float) {
-    self.logp = Tensor(logp)
-    self.logr = Tensor(logr)
+    self.logp = Tensor(logp, on: Device.defaultXLA)
+    self.logr = Tensor(logr, on: Device.defaultXLA)
   }
 
   static var zero: SemiRing { SemiRing(logp: -Float.infinity, logr: -Float.infinity) }
