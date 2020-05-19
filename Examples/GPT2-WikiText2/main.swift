@@ -24,7 +24,7 @@ let trainingBatchSize = 2
 let validationBatchSize = 2
 let numWorkers = 1
 // Use default WikiText2 dataset.
-let dataset = TextUnsupervised(bpe: gpt.bpe, variant: .wikiText2,
+let dataset = TextUnsupervised(variant: .wikiText2,
     trainingBatchSize: trainingBatchSize, validationBatchSize: validationBatchSize,
     sequenceLength: sequenceLength)
 let trainingBatcher = Batcher(
@@ -39,23 +39,23 @@ var optimizer = Adam(for: gpt.model, learningRate: 0.001)
 print("Starting training...")
 
 for epoch in 1...10 {
-    Context.local.learningPhase = .training
-    var trainingLossSum: Float = 0
-    var trainingBatchCount = 0
-    for batch in trainingBatcher.sequenced() {
-        let (documents, labels) = (batch.first, batch.second)
-        let (loss, gradients) = valueWithGradient(at: gpt.model) { model -> Tensor<Float> in
-            let logits = model(documents)
-            let shape = logits.shape
-            return softmaxCrossEntropy(
-                logits: logits.reshaped(to: [shape[0] * shape[1], shape[2]]),
-                labels: labels.reshaped(to: [shape[0] * shape[1]])
-            )
-        }
-        trainingLossSum += loss.scalarized()
-        trainingBatchCount += 1
-        optimizer.update(&gpt.model, along: gradients)
-    }
+    // Context.local.learningPhase = .training
+    // var trainingLossSum: Float = 0
+    // var trainingBatchCount = 0
+    // for batch in trainingBatcher.sequenced() {
+    //     let (documents, labels) = (batch.first, batch.second)
+    //     let (loss, gradients) = valueWithGradient(at: gpt.model) { model -> Tensor<Float> in
+    //         let logits = model(documents)
+    //         let shape = logits.shape
+    //         return softmaxCrossEntropy(
+    //             logits: logits.reshaped(to: [shape[0] * shape[1], shape[2]]),
+    //             labels: labels.reshaped(to: [shape[0] * shape[1]])
+    //         )
+    //     }
+    //     trainingLossSum += loss.scalarized()
+    //     trainingBatchCount += 1
+    //     optimizer.update(&gpt.model, along: gradients)
+    // }
 
     Context.local.learningPhase = .inference
     var testLossSum: Float = 0
