@@ -21,12 +21,12 @@ var gpt = try GPT2()
 
 let sequenceLength = gpt.contextSize
 let trainingBatchSize = 2
-let validationBatchSize = 2
+let validationBatchSize = 1
 let numWorkers = 1
 // Use default WikiText2 dataset.
 let dataset = TextUnsupervised(variant: .wikiText2,
     trainingBatchSize: trainingBatchSize, validationBatchSize: validationBatchSize,
-    sequenceLength: sequenceLength)
+    sequenceLength: sequenceLength, validationDocumentCount: 1)
 let trainingBatcher = Batcher(
     on: dataset.trainingDataset, batchSize: trainingBatchSize, numWorkers: numWorkers, shuffle: true)
 let validationBatcher = Batcher(
