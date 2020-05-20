@@ -144,8 +144,9 @@ struct Attention: ParameterlessLayer {
 
     @differentiable(wrt: (self,input))
     func callAsFunction(_ input: AttentionInputGPT2) -> Tensor<Float> {
+        //print("input.value.shape.last! \(input.value.shape.last!)")
         var dotProducts = batchedMatmul(input.query, input.key, adjointRight: true)
-        dotProducts = causallyMasked(dotProducts, enable: causal) / scale
+        dotProducts = causallyMasked(dotProducts / scale, enable: causal)
         return batchedMatmul(dropout(softmax(dotProducts)), input.value)
     }
 
