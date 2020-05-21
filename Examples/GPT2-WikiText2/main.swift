@@ -38,7 +38,7 @@ var optimizer = Adam(for: gpt.model, learningRate: 0.001)
 
 print("Starting training...")
 
-for epoch in 1...10 {
+for epoch in 1...1 {
     // Context.local.learningPhase = .training
     // var trainingLossSum: Float = 0
     // var trainingBatchCount = 0
@@ -64,7 +64,14 @@ for epoch in 1...10 {
     var totalGuessCount = 0
     for batch in validationBatcher.sequenced() {
         let (documents, labels) = (batch.first, batch.second)
+        print("=====")
+        print("documents.shape \(documents.shape)")
         let logits = gpt.model(documents)
+        print("logits.shape \(logits.shape)")
+        print("logits \(logits)")
+        print("labels.shape \(labels.shape)")
+        print("labels \(labels)")
+
         let shape = logits.shape
         testLossSum += softmaxCrossEntropy(
             logits: logits.reshaped(to: [shape[0] * shape[1], shape[2]]),

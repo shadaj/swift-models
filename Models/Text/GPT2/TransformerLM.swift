@@ -230,10 +230,15 @@ struct MultiHeadAttentionGPT2: Layer {
     @differentiable(wrt: (self,input))
     func callAsFunction(_ input: Tensor<Float>) -> Tensor<Float> {
         let qkvProjected = wqkv(input)
+        print("~~qkvProjected shape: \(qkvProjected.shape) value: \(qkvProjected)")
         let qkvSplit = splitHeads(qkvProjected, headCount: headCount)
         let attentionInput = splitQKV(qkvSplit)
+        print("within MultiHeadAttentionGPT2: attentionInput \(attentionInput)")
         let outputs = attention(attentionInput)
-        return wo(joinHeads(outputs, headCount: headCount))
+        print("within MultiHeadAttentionGPT2: after attention \(outputs)")
+        let tmp = joinHeads(outputs, headCount: headCount)
+        print("within MultiHeadAttentionGPT2: after attention output joinHeads \(tmp)")
+        return wo(tmp)
     }
 
     func callAsFunction(_ input: Tensor<Float>, state: inout AttentionContext) -> Tensor<Float> {
@@ -271,13 +276,28 @@ public struct EncoderLayer: Layer {
 
     @differentiable(wrt: (self,input))
     public func callAsFunction(_ input: Tensor<Float>) -> Tensor<Float> {
-        let attended =
-            input
-            + input.sequenced(
-                through: selfAttentionNorm, selfAttention, selfAttentionDropout)
-        return attended
-            + attended.sequenced(
-                through: feedForwardNorm, feedForward, feedForwardDropout)
+        // let attended =
+        //     input
+        //     + input.sequenced(
+        //         through: selfAttentionNorm, selfAttention, selfAttentionDropout)
+        // return attended
+        //     + attended.sequenced(
+        //         through: feedForwardNorm, feedForward, feedForwardDropout)
+        print("====================================")
+        var tmp = input
+        tmp = selfAttentionNorm(tmp)
+        print("after atten norm \(tmp)")
+        tmp = selfAttention(tmp)
+        print("after atten multihead-atten \(tmp)")
+        tmp = selfAttentionDropout(tmp)
+        print("BEFORE feedForwardNorm \(tmp)")
+        tmp = feedForwardNorm(tmp)
+        print("after feedforward norm \(tmp)")
+        tmp = feedForward(tmp)
+        print("after feedforward dense-gelu-dense \(tmp)")
+        tmp = feedForwardDropout(tmp)
+        print("BEFORE Transformer last norm \(tmp)")
+        return tmp
     }
 
     func callAsFunction(_ input: Tensor<Float>, state: inout AttentionContext) -> Tensor<Float> {
@@ -333,8 +353,11 @@ public struct TransformerLM: Module {
         let positionsTensor = Tensor<Int32>(shape: [1, tokens.shape[1]], scalars: positions, on: tokens.device)
         var h = embedding(tokens)
         h = h + positionalEmbeddings.gathering(atIndices: positionsTensor)
+        print("after embedding \(h)")
+
         h = layers.differentiableReduce(h) { $1($0) }
         h = norm(h)
+        print("after encoders layers + last norm \(h)")
         // A somewhat hacky way to share weights.
         let logits = timeDistributed(h, embedding.embeddings.transposed())
         return logits
