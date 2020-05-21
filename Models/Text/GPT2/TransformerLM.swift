@@ -146,8 +146,20 @@ struct Attention: ParameterlessLayer {
     func callAsFunction(_ input: AttentionInputGPT2) -> Tensor<Float> {
         //print("input.value.shape.last! \(input.value.shape.last!)")
         var dotProducts = batchedMatmul(input.query, input.key, adjointRight: true)
-        dotProducts = causallyMasked(dotProducts / scale, enable: causal)
-        return batchedMatmul(dropout(softmax(dotProducts)), input.value)
+        print("weight after matmul: \(dotProducts)")
+        dotProducts = dotProducts / scale
+        print("weight after scaled: \(dotProducts)")
+
+        dotProducts = causallyMasked(dotProducts, enable: causal)
+        print("weight after masked: \(dotProducts)")
+
+        dotProducts = softmax(dotProducts)
+        print("weight after softmax: \(dotProducts)")
+
+        dotProducts = dropout(dotProducts)
+        print("weight after dropout: \(dotProducts)")
+
+        return batchedMatmul(dotProducts, input.value) // [headCount, timeSteps, featuresPerHead]
     }
 
     func callAsFunction(_ input: AttentionInputGPT2, state: inout AttentionContext) -> Tensor<Float>
@@ -171,7 +183,19 @@ func splitHeads(_ input: Tensor<Float>, headCount: Int) -> Tensor<Float> {
 }
 
 @differentiable(wrt: input)
+func splitQKV2(_ input: Tensor<Float>) -> Tensor<Float> {
+    let (batchSize, timeSteps, features) = (input.shape[0], input.shape[1], input.shape[2])
+    //let featuresPerHead = features / headCount
+    let splitLastDim = input.reshaped(to: [batchSize, timeSteps, 3, features / 3])
+    let movedToFront = splitLastDim.transposed(permutation: 2, 0, 1, 3)
+    return movedToFront
+}
+
+@differentiable(wrt: input)
 func joinHeads(_ input: Tensor<Float>, headCount: Int) -> Tensor<Float> {
+    // [batchSize * headCount, timeSteps, featuresPerHead]
+    print("joinHeads input shape \(input.shape)")
+
     let (generalizedBatch, timeSteps, featuresPerHead) = (
         input.shape[0], input.shape[1], input.shape[2]
     )
@@ -196,6 +220,23 @@ func splitQKV(_ input: Tensor<Float>) -> AttentionInputGPT2 {
     let value = input.slice(
         lowerBounds: [0, 0, 2 * featuresPerHead],
         upperBounds: [generalizedBatch, timeSteps, 3 * featuresPerHead])
+    return makeAttentionInput(query: query, key: key, value: value)
+}
+
+@differentiable(wrt: input)
+func splitHeads2(_ input: Tensor<Float>) -> AttentionInputGPT2 {
+    let (three, batchSize, timeSteps, featuresPerHead) = (
+        input.shape[0], input.shape[1], input.shape[2], input.shape[3] / 12
+    )
+    print("input.shape \(input.shape)")
+
+    let reshaped = input.reshaped(to: [three, batchSize, timeSteps, 12, featuresPerHead])
+        .transposed(permutation: 0, 1, 3, 2, 4)
+        .reshaped(to: [three, batchSize * 12, timeSteps, featuresPerHead])
+
+    let query = reshaped[0]
+    let key = reshaped[1]
+    let value = reshaped[2]
     return makeAttentionInput(query: query, key: key, value: value)
 }
 
@@ -231,12 +272,24 @@ struct MultiHeadAttentionGPT2: Layer {
     func callAsFunction(_ input: Tensor<Float>) -> Tensor<Float> {
         let qkvProjected = wqkv(input)
         print("~~qkvProjected shape: \(qkvProjected.shape) value: \(qkvProjected)")
-        let qkvSplit = splitHeads(qkvProjected, headCount: headCount)
-        let attentionInput = splitQKV(qkvSplit)
+
+        let tmp1 = splitHeads(qkvProjected, headCount: headCount)
+        let tmp2 = splitQKV(tmp1)
+        print("tmp2.query.shape \(tmp2.query.shape)")
+        print("tmp2.key.shape \(tmp2.key.shape)")
+        print("tmp2.value.shape \(tmp2.value.shape)")
+
+        let qkvSplit = splitQKV2(qkvProjected)
+        let attentionInput = splitHeads2(qkvSplit)
+        print("attentionInput.query.shape \(attentionInput.query.shape)")
+        print("attentionInput.key.shape \(attentionInput.key.shape)")
+        print("attentionInput.value.shape \(attentionInput.value.shape)")
+
         print("within MultiHeadAttentionGPT2: attentionInput \(attentionInput)")
         let outputs = attention(attentionInput)
         print("within MultiHeadAttentionGPT2: after attention \(outputs)")
         let tmp = joinHeads(outputs, headCount: headCount)
+        print("within MultiHeadAttentionGPT2: after attention output joinHeads shape \(tmp.shape)")
         print("within MultiHeadAttentionGPT2: after attention output joinHeads \(tmp)")
         return wo(tmp)
     }
@@ -288,6 +341,7 @@ public struct EncoderLayer: Layer {
         tmp = selfAttentionNorm(tmp)
         print("after atten norm \(tmp)")
         tmp = selfAttention(tmp)
+        print("after atten multihead-atten shape\(tmp.shape)")
         print("after atten multihead-atten \(tmp)")
         tmp = selfAttentionDropout(tmp)
         print("BEFORE feedForwardNorm \(tmp)")
