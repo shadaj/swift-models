@@ -337,6 +337,7 @@ public struct EncoderLayer: Layer {
         //     + attended.sequenced(
         //         through: feedForwardNorm, feedForward, feedForwardDropout)
         print("====================================")
+
         var tmp = input
         tmp = selfAttentionNorm(tmp)
         print("after atten norm \(tmp)")
@@ -344,14 +345,22 @@ public struct EncoderLayer: Layer {
         print("after atten multihead-atten shape\(tmp.shape)")
         print("after atten multihead-atten \(tmp)")
         tmp = selfAttentionDropout(tmp)
-        print("BEFORE feedForwardNorm \(tmp)")
-        tmp = feedForwardNorm(tmp)
-        print("after feedforward norm \(tmp)")
-        tmp = feedForward(tmp)
-        print("after feedforward dense-gelu-dense \(tmp)")
-        tmp = feedForwardDropout(tmp)
-        print("BEFORE Transformer last norm \(tmp)")
-        return tmp
+
+        tmp = tmp + input
+        print("after atten residual \(tmp)")
+
+        var tmp2 = tmp
+        print("BEFORE feedForwardNorm \(tmp2)")
+        tmp2 = feedForwardNorm(tmp2)
+        print("after feedforward norm \(tmp2)")
+        tmp2 = feedForward(tmp2)
+        print("after feedforward dense-gelu-dense \(tmp2)")
+        tmp2 = feedForwardDropout(tmp2)
+        print("BEFORE Transformer last norm \(tmp2)")
+
+        tmp2 = tmp2 + tmp
+
+        return tmp2
     }
 
     func callAsFunction(_ input: Tensor<Float>, state: inout AttentionContext) -> Tensor<Float> {
@@ -378,7 +387,7 @@ public struct TransformerLM: Module {
     ) {
         self.embedding = embedding
         self.positionalEmbeddings = positionalEmbeddings
-        self.layers = layers
+        self.layers = Array(layers[..<1])
         self.norm = norm
     }
 
