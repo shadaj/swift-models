@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import TensorFlow
+import LayerInit
 
 // Original Paper:
 // "Gradient-Based Learning Applied to Document Recognition"
@@ -22,21 +23,26 @@ import TensorFlow
 // Note: this implementation connects all the feature maps in the second convolutional layer.
 // Additionally, ReLU is used instead of sigmoid activations.
 
+public struct AutoLeNet: AutoModule {
+    public lazy var initializeLayer = {
+        return AutoConv2D<Float>(filterShape: (5, 5), outputChannels: 6, padding: .same, activation: relu)
+            .then(AutoAvgPool2D(poolSize: (2, 2), strides: (2, 2)))
+            .then(AutoConv2D(filterShape: (5, 5), outputChannels: 16, activation: relu))
+            .then(AutoAvgPool2D(poolSize: (2, 2), strides: (2, 2)))
+            .then(AutoFlatten())
+            .then(AutoDense(outputSize: 120, activation: relu))
+            .then(AutoDense(outputSize: 84, activation: relu))
+            .then(AutoDense(outputSize: 10))
+    }()
+}
+
 public struct LeNet: Layer {
-    public var conv1 = Conv2D<Float>(filterShape: (5, 5, 1, 6), padding: .same, activation: relu)
-    public var pool1 = AvgPool2D<Float>(poolSize: (2, 2), strides: (2, 2))
-    public var conv2 = Conv2D<Float>(filterShape: (5, 5, 6, 16), activation: relu)
-    public var pool2 = AvgPool2D<Float>(poolSize: (2, 2), strides: (2, 2))
-    public var flatten = Flatten<Float>()
-    public var fc1 = Dense<Float>(inputSize: 400, outputSize: 120, activation: relu)
-    public var fc2 = Dense<Float>(inputSize: 120, outputSize: 84, activation: relu)
-    public var fc3 = Dense<Float>(inputSize: 84, outputSize: 10)
+    var underlying = AutoLeNet().buildModel(inputShape: (28, 28, 1))
 
     public init() {}
 
     @differentiable
     public func callAsFunction(_ input: Tensor<Float>) -> Tensor<Float> {
-        let convolved = input.sequenced(through: conv1, pool1, conv2, pool2)
-        return convolved.sequenced(through: flatten, fc1, fc2, fc3)
+        return underlying(input)
     }
 }

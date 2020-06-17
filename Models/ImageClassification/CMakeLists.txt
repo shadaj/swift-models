@@ -15,6 +15,8 @@ set_target_properties(ImageClassificationModels PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_Swift_MODULE_DIRECTORY})
 target_compile_options(ImageClassificationModels PRIVATE
   $<$<BOOL:${BUILD_TESTING}>:-enable-testing>)
+target_link_libraries(ImageClassificationModels PRIVATE
+  LayerInit)
 
 
 install(TARGETS ImageClassificationModels
