@@ -14,6 +14,8 @@ set_target_properties(LayerInit PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_Swift_MODULE_DIRECTORY})
 target_compile_options(LayerInit PRIVATE
   $<$<BOOL:${BUILD_TESTING}>:-enable-testing>)
+target_link_libraries(ImageClassificationModels PRIVATE
+  LayerInit)
 
 
 install(TARGETS LayerInit
