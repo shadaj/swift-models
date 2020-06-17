@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import TensorFlow
+import LayerInit
 
 // Original Paper:
 // "Deep Residual Learning for Image Recognition"
@@ -24,93 +25,115 @@ import TensorFlow
 // The structure of this implementation was inspired by the Flax ResNet example:
 // https://github.com/google/flax/blob/master/examples/imagenet/models.py
 
-public struct ConvBN: Layer {
-    public var conv: Conv2D<Float>
-    public var norm: BatchNorm<Float>
+public struct AutoConvBN: AutoModule {
+    let filterShape: (Int, Int)
+    let outputChannels: (Int)
+    let strides: (Int, Int)
+    let padding: Padding
 
     public init(
-        filterShape: (Int, Int, Int, Int),
+        filterShape: (Int, Int),
+        outputChannels: Int,
         strides: (Int, Int) = (1, 1),
         padding: Padding = .valid
     ) {
-        self.conv = Conv2D(filterShape: filterShape, strides: strides, padding: padding, useBias: false)
-        self.norm = BatchNorm(featureCount: filterShape.3, momentum: 0.9, epsilon: 1e-5)
+        self.filterShape = filterShape
+        self.outputChannels = outputChannels
+        self.strides = strides
+        self.padding = padding
     }
 
-    @differentiable
-    public func callAsFunction(_ input: Tensor<Float>) -> Tensor<Float> {
-        return input.sequenced(through: conv, norm)
-    }
+    public lazy var initializeLayer = {
+        return AutoConv2D<Float>(filterShape: filterShape, outputChannels: outputChannels, strides: strides, padding: padding, useBias: false)
+            .then(AutoBatchNorm(momentum: 0.9, epsilon: 1e-5))
+    }()
 }
 
-public struct ResidualBlock: Layer {
-    public var projection: ConvBN
-    @noDerivative public let needsProjection: Bool
-    public var earlyConvs: [ConvBN] = []
-    public var lastConv: ConvBN
+public struct AutoResidualBlock: AutoModule {
+    let inputFilters: Int
+    let filters: Int
+    let strides: (Int, Int)
+    let useLaterStride: Bool
+    let isBasic: Bool
 
     public init(
         inputFilters: Int, filters: Int, strides: (Int, Int), useLaterStride: Bool, isBasic: Bool
     ) {
-        let outFilters = filters * (isBasic ? 1 : 4)
-        self.needsProjection = (inputFilters != outFilters) || (strides.0 != 1)
-        // TODO: Replace the following, so as to not waste memory for non-projection cases.
-        if needsProjection {
-            projection = ConvBN(filterShape: (1, 1, inputFilters, outFilters), strides: strides)
-        } else {
-            projection = ConvBN(filterShape: (1, 1, 1, 1))
-        }
+        self.inputFilters = inputFilters
+        self.filters = filters
+        self.strides = strides
+        self.useLaterStride = useLaterStride
+        self.isBasic = isBasic
+    }
 
+    public typealias ConvPlusResidual = AutoSplitMerge<
+        AutoSequencedMany<AutoConvBN>,
+        AutoSequenced<
+            AutoSequencedMany<
+                AutoSequenced<
+                    AutoConvBN,
+                    AutoFunction<Tensor<Float>, Tensor<Float>, (Int, Int, Int), (Int, Int, Int)
+                >
+            >>,
+            AutoConvBN
+        >,
+        Tensor<Float>, (Int, Int, Int)
+    >
+    
+    public typealias LayerType = AutoSequenced<ConvPlusResidual, AutoFunction<Tensor<Float>, Tensor<Float>, (Int, Int, Int), (Int, Int, Int)>>
+
+    public lazy var initializeLayer: LayerType = {
+        let outFilters = filters * (isBasic ? 1 : 4)
+        let needsProjection = (inputFilters != outFilters) || (strides.0 != 1)
+
+        let projection = needsProjection
+            ? AutoConvBN(filterShape: (1, 1), outputChannels: outFilters, strides: strides)
+            : AutoConvBN(filterShape: (1, 1), outputChannels: 1)
+
+        let residual = AutoSequencedMany(layers: needsProjection ? [projection]: [])
+
+        var earlyConvs: [AutoConvBN] = []
+        let lastConv: AutoConvBN
         if isBasic {
-            earlyConvs = [
-                (ConvBN(
-                    filterShape: (3, 3, inputFilters, filters), strides: strides, padding: .same)),
-            ]
-            lastConv = ConvBN(filterShape: (3, 3, filters, outFilters), padding: .same)
+            earlyConvs.append(
+                AutoConvBN(filterShape: (3, 3), outputChannels: filters, strides: strides, padding: .same))
+            lastConv = AutoConvBN(filterShape: (3, 3), outputChannels: outFilters, padding: .same)
         } else {
             if useLaterStride {
                 // Configure for ResNet V1.5 (the more common implementation).
-                earlyConvs.append(ConvBN(filterShape: (1, 1, inputFilters, filters)))
+                earlyConvs.append(AutoConvBN(filterShape: (1, 1), outputChannels: filters))
                 earlyConvs.append(
-                    ConvBN(filterShape: (3, 3, filters, filters), strides: strides, padding: .same))
+                    AutoConvBN(filterShape: (3, 3), outputChannels: filters, strides: strides, padding: .same))
             } else {
                 // Configure for ResNet V1 (the paper implementation).
                 earlyConvs.append(
-                    ConvBN(filterShape: (1, 1, inputFilters, filters), strides: strides))
-                earlyConvs.append(ConvBN(filterShape: (3, 3, filters, filters), padding: .same))
+                    AutoConvBN(filterShape: (1, 1), outputChannels: filters, strides: strides))
+                earlyConvs.append(AutoConvBN(filterShape: (3, 3), outputChannels: filters, padding: .same))
             }
-            lastConv = ConvBN(filterShape: (1, 1, filters, outFilters))
-        }
-    }
-
-    @differentiable
-    public func callAsFunction(_ input: Tensor<Float>) -> Tensor<Float> {
-        let residual: Tensor<Float>
-        // TODO: Find a way for this to be checked only at initialization, not during training or 
-        // inference.
-        if needsProjection {
-            residual = projection(input)
-        } else {
-            residual = input
+            lastConv = AutoConvBN(filterShape: (1, 1), outputChannels: outFilters)
         }
 
-        let earlyConvsReduced = earlyConvs.differentiableReduce(input) { last, layer in
-            relu(layer(last))
-        }
-        let lastConvResult = lastConv(earlyConvsReduced)
+        let earlyConvsWithRelu = earlyConvs.map({ (conv) in
+            conv.then(AutoFunction(fnShape: { $0 }, fn: { relu($0) }))
+        })
 
-        return relu(lastConvResult + residual)
-    }
+        let lastConvResult = AutoSequencedMany(layers: earlyConvsWithRelu).then(lastConv)
+
+        let convPlusResidual = AutoSplitMerge(
+            layer1: residual,
+            layer2: lastConvResult,
+            mergeOutputShape: { (l1, l2) in l1 }, mergeFn: { $0 + $1 })
+
+        return convPlusResidual.then(AutoFunction(fnShape: { $0 }, fn: { relu($0) }))
+    }()
 }
 
 /// An implementation of the ResNet v1 and v1.5 architectures, at various depths.
-public struct ResNet: Layer {
-    public var initialLayer: ConvBN
-    public var maxPool: MaxPool2D<Float>
-    public var residualBlocks: [ResidualBlock] = []
-    public var avgPool = GlobalAvgPool2D<Float>()
-    public var flatten = Flatten<Float>()
-    public var classifier: Dense<Float>
+public struct AutoResNet: AutoModule {
+    let classCount: Int
+    let depth: ResNet.Depth
+    let downsamplingInFirstStage: Bool
+    let useLaterStride: Bool
 
     /// Initializes a new ResNet v1 or v1.5 network model.
     ///
@@ -125,29 +148,40 @@ public struct ResNet: Layer {
     ///   - useLaterStride: If false, the stride within the residual block is placed at the position
     ///     specified in He, et al., corresponding to ResNet v1. If true, the stride is moved to the
     ///     3x3 convolution, corresponding to the v1.5 variant of the architecture. 
-    public init(
-        classCount: Int, depth: Depth, downsamplingInFirstStage: Bool = true,
-        useLaterStride: Bool = true
-    ) {
+    public init(classCount: Int, depth: ResNet.Depth, downsamplingInFirstStage: Bool = true, useLaterStride: Bool = true) {
+        self.classCount = classCount
+        self.depth = depth
+        self.downsamplingInFirstStage = downsamplingInFirstStage
+        self.useLaterStride = useLaterStride
+    }
+
+    public typealias LayerType = AutoSequenced<AutoSequenced<AutoSequenced<AutoSequenced<AutoSequenced<AutoConvBN, AutoFunction<Tensor<Float>, Tensor<Float>, AutoConv2D<Float>.OutputShape, AutoMaxPool2D<Float>.InputShape>>, AutoMaxPool2D<Float>>, AutoSequencedMany<AutoResidualBlock>>, AutoGlobalAvgPool2D<Float>>, AutoDense<Float>>
+
+    public lazy var initializeLayer: LayerType = {
+        let initialLayer: AutoConvBN
+        let maxPool: AutoMaxPool2D<Float>
+
         let inputFilters: Int
-        
+
         if downsamplingInFirstStage {
             inputFilters = 64
-            initialLayer = ConvBN(
-                filterShape: (7, 7, 3, inputFilters), strides: (2, 2), padding: .same)
-            maxPool = MaxPool2D(poolSize: (3, 3), strides: (2, 2), padding: .same)
+            initialLayer = AutoConvBN(
+                filterShape: (7, 7), outputChannels: inputFilters, strides: (2, 2), padding: .same)
+            maxPool = AutoMaxPool2D(poolSize: (3, 3), strides: (2, 2), padding: .same)
         } else {
             inputFilters = 16
-            initialLayer = ConvBN(filterShape: (3, 3, 3, inputFilters), padding: .same)
-            maxPool = MaxPool2D(poolSize: (1, 1), strides: (1, 1))  // no-op
+            initialLayer = AutoConvBN(
+                filterShape: (3, 3), outputChannels: inputFilters, padding: .same)
+            maxPool = AutoMaxPool2D(poolSize: (1, 1), strides: (1, 1))  // no-op
         }
 
+        var residualBlocks: [AutoResidualBlock] = []
         var lastInputFilterCount = inputFilters
         for (blockSizeIndex, blockSize) in depth.layerBlockSizes.enumerated() {
             for blockIndex in 0..<blockSize {
                 let strides = ((blockSizeIndex > 0) && (blockIndex == 0)) ? (2, 2) : (1, 1)
                 let filters = inputFilters * Int(pow(2.0, Double(blockSizeIndex)))
-                let residualBlock = ResidualBlock(
+                let residualBlock = AutoResidualBlock(
                     inputFilters: lastInputFilterCount, filters: filters, strides: strides,
                     useLaterStride: useLaterStride, isBasic: depth.usesBasicBlocks)
                 lastInputFilterCount = filters * (depth.usesBasicBlocks ? 1 : 4)
@@ -155,19 +189,32 @@ public struct ResNet: Layer {
             }
         }
 
-        let finalFilters = inputFilters * Int(pow(2.0, Double(depth.layerBlockSizes.count - 1)))
-        classifier = Dense(
-            inputSize: depth.usesBasicBlocks ? finalFilters : finalFilters * 4,
-            outputSize: classCount)
+        return initialLayer
+            .then(AutoFunction(fnShape: { $0 }, fn: { (prev: Tensor<Float>) in relu(prev) }))
+            .then(maxPool)
+            .then(AutoSequencedMany(layers: residualBlocks))
+            .then(AutoGlobalAvgPool2D())
+            .then(AutoDense(outputSize: classCount))
+    }()
+}
+
+public struct ResNet: Layer {
+    public var underlying: BuiltAutoLayer<AutoResNet.InstanceType>
+    
+    public init(
+        classCount: Int, depth: Depth, downsamplingInFirstStage: Bool = true,
+        useLaterStride: Bool = true
+    ) {
+        underlying = AutoResNet(
+            classCount: classCount, depth: depth,
+            downsamplingInFirstStage: downsamplingInFirstStage,
+            useLaterStride: useLaterStride
+        ).buildModel(inputShape: (1, 1, 3))
     }
 
     @differentiable
     public func callAsFunction(_ input: Tensor<Float>) -> Tensor<Float> {
-        let inputLayer = maxPool(relu(initialLayer(input)))
-        let blocksReduced = residualBlocks.differentiableReduce(inputLayer) { last, layer in
-            layer(last)
-        }
-        return blocksReduced.sequenced(through: avgPool, flatten, classifier)
+        underlying(input)
     }
 }
 
