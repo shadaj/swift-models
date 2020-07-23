@@ -137,10 +137,15 @@ let package = Package(
             dependencies: ["ArgumentParser", "Datasets", "ModelSupport", "TextModels"],
             path: "Examples/WordSeg"
         ),
-       .target(
-           name: "Fractals",
-           dependencies: ["ArgumentParser", "ModelSupport"],
-           path: "Examples/Fractals"
-       )
+        .target(
+            name: "Fractals",
+            dependencies: ["ArgumentParser", "ModelSupport"],
+            path: "Examples/Fractals"
+        ),
+        .target(
+            name: "LayerPrototyping",
+            dependencies: ["Benchmark"],
+            path: "LayerPrototyping"
+        )
     ]
 )
