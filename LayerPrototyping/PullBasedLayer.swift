@@ -1,3 +1,4 @@
+// does not compile yet due to AD bug (fix will exist soon)
 protocol MyProtocol {
     @differentiable(wrt: weight)
     func execute(weight: Float, outputs: inout Float)
